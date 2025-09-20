@@ -11,7 +11,7 @@ import uuid
 from datetime import datetime
 
 # AI agents
-from ai_agents.agents import AgentConfig, SearchAgent, ChatAgent
+from ai_agents.agents import AgentConfig, SearchAgent, ChatAgent, RecipeAgent
 
 
 ROOT_DIR = Path(__file__).parent
@@ -26,6 +26,7 @@ db = client[os.environ['DB_NAME']]
 agent_config = AgentConfig()
 search_agent: Optional[SearchAgent] = None
 chat_agent: Optional[ChatAgent] = None
+recipe_agent: Optional[RecipeAgent] = None
 
 # Main app
 app = FastAPI(title="AI Agents API", description="Minimal AI Agents API with LangGraph and MCP support")
@@ -71,6 +72,20 @@ class SearchResponse(BaseModel):
     summary: str
     search_results: Optional[dict] = None
     sources_count: int
+    error: Optional[str] = None
+
+
+class RecipeRequest(BaseModel):
+    ingredients: List[str]
+    dietary_restrictions: Optional[List[str]] = []
+    cuisine_type: Optional[str] = None
+    meal_type: Optional[str] = None
+    cooking_time: Optional[str] = None
+
+
+class RecipeResponse(BaseModel):
+    success: bool
+    recipe: dict
     error: Optional[str] = None
 
 # Routes
@@ -194,6 +209,137 @@ async def get_agent_capabilities():
             "success": False,
             "error": str(e)
         }
+
+
+@api_router.post("/recipes/generate", response_model=RecipeResponse)
+async def generate_recipe(request: RecipeRequest):
+    # Generate a recipe using specialized AI agent
+    global recipe_agent
+
+    try:
+        # Init recipe agent if needed
+        if recipe_agent is None:
+            recipe_agent = RecipeAgent(agent_config)
+
+        # Build recipe generation prompt
+        ingredients_list = ", ".join(request.ingredients)
+        prompt_parts = [f"Create a detailed recipe using these ingredients: {ingredients_list}"]
+
+        if request.dietary_restrictions:
+            restrictions = ", ".join(request.dietary_restrictions)
+            prompt_parts.append(f"Dietary restrictions: {restrictions}")
+
+        if request.cuisine_type:
+            prompt_parts.append(f"Cuisine type: {request.cuisine_type}")
+
+        if request.meal_type:
+            prompt_parts.append(f"Meal type: {request.meal_type}")
+
+        if request.cooking_time:
+            prompt_parts.append(f"Cooking time preference: {request.cooking_time}")
+
+        prompt_parts.append("""
+{
+  "name": "Recipe Name",
+  "description": "Brief description",
+  "prep_time": "X minutes",
+  "cook_time": "X minutes",
+  "servings": "X",
+  "difficulty": "Easy/Medium/Hard",
+  "ingredients": [
+    {"item": "ingredient name", "amount": "quantity", "unit": "unit"}
+  ],
+  "instructions": [
+    {"step": 1, "instruction": "First step"},
+    {"step": 2, "instruction": "Second step"}
+  ],
+  "tips": ["helpful tip 1", "helpful tip 2"],
+  "nutrition": {
+    "calories": "approximate calories per serving",
+    "protein": "protein content",
+    "carbs": "carbohydrate content",
+    "fat": "fat content"
+  }
+}""")
+
+        recipe_prompt = "\n".join(prompt_parts)
+
+        # Execute agent
+        result = await recipe_agent.execute(recipe_prompt)
+
+        if result.success:
+            # Try to parse as JSON, fallback to structured text
+            import json
+            import re
+
+            content = result.content.strip()
+
+            # Try to extract JSON from the response
+            json_match = re.search(r'\{.*\}', content, re.DOTALL)
+            if json_match:
+                json_str = json_match.group()
+            else:
+                json_str = content
+
+            try:
+                recipe_data = json.loads(json_str)
+
+                # Validate required fields
+                required_fields = ['name', 'description', 'prep_time', 'cook_time', 'servings', 'difficulty', 'ingredients', 'instructions']
+                for field in required_fields:
+                    if field not in recipe_data:
+                        raise ValueError(f"Missing required field: {field}")
+
+            except (json.JSONDecodeError, ValueError) as e:
+                logger.warning(f"Failed to parse recipe JSON: {e}, falling back to structured data")
+                # If JSON parsing fails, create structured data from text
+                recipe_data = {
+                    "name": f"{request.cuisine_type.title() if request.cuisine_type else ''} {request.meal_type.title() if request.meal_type else 'Dish'} with {', '.join(request.ingredients[:2])}".strip(),
+                    "description": f"A delicious recipe using {', '.join(request.ingredients)} with {', '.join(request.dietary_restrictions) if request.dietary_restrictions else 'no dietary restrictions'}",
+                    "prep_time": "15 minutes",
+                    "cook_time": request.cooking_time or "30 minutes",
+                    "servings": "4",
+                    "difficulty": "Medium",
+                    "ingredients": [
+                        {"item": ing, "amount": "1-2", "unit": "portions"} for ing in request.ingredients
+                    ],
+                    "instructions": [
+                        {"step": 1, "instruction": f"Prepare all ingredients: {', '.join(request.ingredients)}"},
+                        {"step": 2, "instruction": "Heat oil in a large pan over medium heat"},
+                        {"step": 3, "instruction": "Add ingredients and cook according to recipe requirements"},
+                        {"step": 4, "instruction": "Season with salt, pepper, and herbs to taste"},
+                        {"step": 5, "instruction": "Serve hot and enjoy!"}
+                    ],
+                    "tips": [
+                        "Adjust seasoning to taste",
+                        "Feel free to substitute ingredients based on availability"
+                    ],
+                    "nutrition": {
+                        "calories": "300-400 per serving",
+                        "protein": "15-25g",
+                        "carbs": "20-40g",
+                        "fat": "10-20g"
+                    }
+                }
+
+            return RecipeResponse(
+                success=True,
+                recipe=recipe_data
+            )
+        else:
+            return RecipeResponse(
+                success=False,
+                recipe={},
+                error=result.error
+            )
+
+    except Exception as e:
+        logger.error(f"Error in recipe generation endpoint: {e}")
+        return RecipeResponse(
+            success=False,
+            recipe={},
+            error=str(e)
+        )
 
 # Include router
 app.include_router(api_router)

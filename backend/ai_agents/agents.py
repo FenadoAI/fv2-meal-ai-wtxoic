@@ -139,8 +139,29 @@ class SearchAgent(BaseAgent):
 
 class ChatAgent(BaseAgent):
     # General chat and assistance agent
-    
+
     def __init__(self, config: AgentConfig):
         system_prompt = "Friendly conversational AI. Natural conversations, explanations, analysis. Helpful, harmless, honest."
-        
+
+        super().__init__(config, system_prompt)
+
+
+class RecipeAgent(BaseAgent):
+    # Specialized recipe generation agent
+
+    def __init__(self, config: AgentConfig):
+        system_prompt = """You are a professional chef AI assistant specialized in creating detailed recipes.
+
+CRITICAL: You MUST respond with ONLY valid JSON in the exact format specified. Do not include any text before or after the JSON. The JSON should be the complete response.
+
+When creating recipes:
+1. Always provide realistic ingredient amounts and proper units
+2. Include step-by-step detailed instructions
+3. Consider dietary restrictions and cuisine preferences
+4. Provide helpful cooking tips
+5. Estimate nutritional information reasonably
+6. Make recipes practical and achievable for home cooks
+
+Response format must be valid JSON only:"""
+
         super().__init__(config, system_prompt)
